@@ -1,8 +1,8 @@
 # QueryLens — Implementation Status & Roadmap
 
 This document is the single reference for what QueryLens actually contains
-today (Phases 1-6, delivered) and what's left to build (Phases 7-11, not
-started). It consolidates and supersedes the phase-by-phase notes scattered
+(Phases 1-7, delivered) and what's left to build (Phases 8-11, not
+started)
 across the root `README.md` and `docs/user-guide.md` — read this first if
 you want the full picture; read those for narrower, task-focused guidance.
 
@@ -16,8 +16,8 @@ you want the full picture; read those for narrower, task-focused guidance.
 | 4 | ADO.NET adapter | ✅ Delivered | Connection/command decorator; gives Dapper support for free |
 | 5 | SQL Server Query Store | ✅ Delivered | Reads `sys.query_store_*`, correlates with app-captured queries |
 | 6 | Execution plan analysis | ✅ Delivered | Parses ShowPlan XML, 9 advisory rules, missing-index suggestions |
-| 7 | Advanced rules / regression | ❌ Not started | Baseline storage + comparison, regression detection |
-| 8 | CLI | ❌ Not started | `querylens analyze/report/compare/verify` |
+| 7 | Advanced rules / regression | ✅ Delivered | Baseline storage + comparison, regression detection |
+| 8 | CLI | ✅ Delivered | `querylens analyze/report/compare/verify` (`src/QueryLens.Cli`; HTML format is a hook for Phase 9) |
 | 9 | HTML report | ❌ Not started | Static, server-less HTML report renderer |
 | 10 | Regression baselines / CI-CD gate | ❌ Not started | Build-breaking performance gate for pipelines |
 | 11 | Dashboard | ❌ Not started | Web UI over everything above |
@@ -322,6 +322,32 @@ against.
 
 ---
 
+### Phase 7: Regression baselines (`QueryLens.Core/Baselines/`)
+
+Compares a current run against a saved baseline. Pure data transformation.
+
+- `BaselineSnapshot` — versioned (`SchemaVersion`), labelled copy of
+  per-query `QueryStatistics`; `FromStatistics`/`FromReport`.
+- `BaselineSerializer` — indented camelCase JSON via `System.Text.Json`
+  (new Core package dependency); `Save`/`Load`; rejects malformed JSON and
+  newer schema versions with `InvalidDataException`.
+- `BaselineComparer` / `QueryComparison` — pairs by `QueryHash`; percentage
+  change for average duration, P95, CPU, logical reads, execution count;
+  queries are Compared, New or Removed.
+- `QueryRegressionRule` (`QUERYREGRESSION001`) — one finding per query when
+  average duration, CPU or logical reads grew by at least
+  `RegressionTolerancePercent`; Critical at `RegressionCriticalPercent`,
+  else Warning; ignores baseline duration/CPU below `RegressionMinBaselineMs`;
+  gated by `Analysis.QueryRegression`.
+- `QueryLensPipeline.CreateBaseline(label)` and
+  `AnalyzeAgainstBaseline(baseline)` (merges regression findings and re-scores).
+
+**Validation**: fully validated by 13 unit tests.
+**Not included**: Query Store/execution-plan data in baselines, and
+`IQueryMetricsSink` implementations.
+
+---
+
 ## Part 2 — Cross-cutting systems (current full state)
 
 ### `QueryLensOptions` reference
@@ -348,10 +374,13 @@ QueryLensOptions
 │   ├── ExpensiveSortRowThreshold       (10000)                  ← Phase 6
 │   ├── ExpensiveHashRowThreshold       (10000)                  ← Phase 6
 │   ├── SpoolRowThreshold               (10000)                  ← Phase 6
-│   └── RowCountDiscrepancyRatio        (10.0)                   ← Phase 6
+│   ├── RowCountDiscrepancyRatio        (10.0)                   ← Phase 6
+│   ├── RegressionTolerancePercent      (20)                     ← Phase 7
+│   ├── RegressionCriticalPercent       (100)                    ← Phase 7
+│   └── RegressionMinBaselineMs         (1)                      ← Phase 7
 ├── Analysis
 │   ├── NPlusOne                        (bool, default true)
-│   ├── QueryRegression                 (bool, default true)     — reserved; nothing implements regression detection yet (Phase 7)
+│   ├── QueryRegression                 (bool, default true)     ← used starting Phase 7
 │   ├── ExecutionPlan                   (bool, default true)     ← used starting Phase 6
 │   └── QueryStore                      (bool, default true)     ← used starting Phase 5
 └── Privacy
@@ -360,9 +389,8 @@ QueryLensOptions
 ```
 
 Two options exist today with **no code reading them yet**:
-`Analysis.QueryRegression` and `Privacy.RedactSensitiveData`/
-`CaptureParameterValues` are placeholders for Phase 7 and a future
-parameter-redaction pass, respectively. They don't currently change any
+`Privacy.RedactSensitiveData`/`CaptureParameterValues` are placeholders
+for a future parameter-redaction pass.
 behavior — this is a known, intentional gap (the options were defined early
 so the schema wouldn't need to change shape later), not a bug.
 
@@ -376,7 +404,7 @@ so the schema wouldn't need to change shape later), not a bug.
 | Query Count | `QUERYEXPLOSION001` |
 | N+1 | `NPLUSONE001` |
 | Result Size | `LARGERESULT001` |
-| Regression | `QUERYREGRESSION001` (reserved — nothing produces this RuleId yet; Phase 7) |
+| Regression | `QUERYREGRESSION001` (Phase 7) |
 | Other (catch-all) | any unrecognized RuleId, plus `PARALLELISM001` and `ROWCOUNTDISCREPANCY001` (informational/edge-case, deliberately not mapped) |
 
 ### Privacy model (consistent across every adapter)
@@ -409,7 +437,8 @@ so explicitly rather than blending unverified code in with proven code.
 
 ## Part 3 — What's remaining
 
-The original phased plan (unchanged since Phase 1) has five phases left.
+The original phased plan (unchanged since Phase 1) has four phases left
+(Phase 7 has since been delivered; its description below is kept for history).
 None of this exists yet — no partial implementation, no stubs — this is a
 from-scratch description of each based on the same source spec the first
 six phases were built from.
@@ -558,9 +587,8 @@ delivery pattern hasn't required until now.
 
 - No `IQueryMetricsSink` implementations ship yet (console/file/SQL Server/
   OpenTelemetry) — only the interface exists (Phase 1).
-- `Analysis.QueryRegression` and the `Privacy.CaptureParameterValues`/
-  `RedactSensitiveData` toggles exist in configuration but nothing reads
-  them yet (Phase 7 and a future redaction pass, respectively).
+- The `Privacy.CaptureParameterValues`/`RedactSensitiveData` toggles exist
+  in configuration but nothing reads them yet (future redaction pass).
 - Query Store correlation is best-effort, not guaranteed (Phase 5) —
   documented in `QueryStoreCorrelator`.
 - `RowCountDiscrepancyRule` needs an *actual* (not estimated) execution

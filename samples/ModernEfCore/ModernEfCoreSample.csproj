@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ModernEfCoreSample</RootNamespace>
+    <AssemblyName>ModernEfCoreSample</AssemblyName>
+    <Description>Illustrative ASP.NET Core 8 + EF Core minimal API showing QueryLens registration, N+1 detection, and reporting. Not built/run in the delivery sandbox - see Phase 3 notes.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QueryLens.Core\QueryLens.Core.csproj" />
+    <ProjectReference Include="..\..\src\QueryLens.EFCore\QueryLens.EFCore.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <RootNamespace>NetFrameworkAdoNetSample</RootNamespace>
+    <AssemblyName>NetFrameworkAdoNetSample</AssemblyName>
+    <Description>Illustrative .NET Framework 4.7.2 console app showing QueryLens wrapping raw ADO.NET (System.Data.SqlClient) and Dapper through the same connection. Not built/run in the delivery sandbox - see Phase 4 notes.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.35" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QueryLens.Core\QueryLens.Core.csproj" />
+    <ProjectReference Include="..\..\src\QueryLens.AdoNet\QueryLens.AdoNet.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Configuration" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="App.config">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

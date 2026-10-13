@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>8.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <RootNamespace>QueryLens.AdoNet</RootNamespace>
+    <AssemblyName>QueryLens.AdoNet</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <Description>Generic ADO.NET integration for QueryLens: a DbConnection/DbCommand/DbTransaction decorator that captures every command transparently - including commands issued by Dapper, since Dapper executes through whatever IDbConnection it's given. Works anywhere ADO.NET does (.NET Framework 4.6.1+ and modern .NET).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QueryLens.Core\QueryLens.Core.csproj" />
+  </ItemGroup>
+
+</Project>

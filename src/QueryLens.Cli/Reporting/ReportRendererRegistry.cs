@@ -17,6 +17,7 @@ namespace QueryLens.Cli.Reporting
         {
             var registry = new ReportRendererRegistry();
             registry.Register(new JsonReportRenderer());
+            registry.Register(new HtmlReportRenderer());
             return registry;
         }
 

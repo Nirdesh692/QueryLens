@@ -68,15 +68,37 @@ namespace QueryLens.Cli.Tests
         }
 
         [Fact]
-        public void Html_format_is_a_hook_that_reports_not_available()
+        public void Html_report_renders_full_document_with_score_and_sections()
         {
             using var h = new CliTestHarness();
-            var input = h.WriteSnapshot("c.json", Stat("aaa", 5));
+            var input = h.WriteSnapshot("c.json", Stat("aaa", 2000, count: 5, reads: 100));
 
-            var r = h.Run("report", input, "--format", "html");
+            var r = h.Run("report", input, "--format", "html", "--label", "Sprint 42");
 
-            Assert.Equal(ExitCodes.UsageError, r.ExitCode);
-            Assert.Contains("not available yet", r.Error);
+            Assert.Equal(ExitCodes.Success, r.ExitCode);
+            Assert.StartsWith("<!DOCTYPE html>", r.Output.TrimStart());
+            Assert.Contains("QueryLens", r.Output);
+            Assert.Contains("Sprint 42", r.Output);
+            Assert.Contains("aaa", r.Output);
+            Assert.Contains("Performance Score", r.Output);
+            Assert.Contains("Query Catalog", r.Output);
+            Assert.Contains("2,000.0 ms", r.Output);
+        }
+
+        [Fact]
+        public void Html_report_can_be_written_to_file()
+        {
+            using var h = new CliTestHarness();
+            var input = h.WriteSnapshot("c.json", Stat("aaa", 500));
+            var output = h.PathFor("report.html");
+
+            var r = h.Run("report", input, "--format", "html", "--output", output);
+
+            Assert.Equal(ExitCodes.Success, r.ExitCode);
+            Assert.True(File.Exists(output));
+            var html = File.ReadAllText(output);
+            Assert.StartsWith("<!DOCTYPE html>", html.TrimStart());
+            Assert.Contains("aaa", html);
         }
 
         [Fact]

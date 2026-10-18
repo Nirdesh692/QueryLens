@@ -381,10 +381,18 @@ foreach (var finding in report.Findings.OrderByDescending(f => f.Severity))
 }
 ```
 
-There's no CLI or HTML renderer yet (that's Phase 8-9) — for now, call
-`Analyze()` on a timer (e.g. every few minutes, or on-demand from an admin
-endpoint) and print, log, or export `PerformanceReport` however suits your
-project.
+You can also use the **QueryLens CLI** (`QueryLens.Cli`) to analyze, compare, verify, and generate reports without writing code:
+
+```bash
+# Generate a JSON report
+querylens report current.json --format json --output report.json
+
+# Generate an offline, single-file HTML report with scorecard, top culprits & query catalog
+querylens report current.json --format html --output report.html
+
+# Analyze against a baseline and generate an HTML report with regression callouts
+querylens report current.json --baseline baseline.json --format html --output report.html --label "Release 2.0"
+```
 
 ## 7. Practical notes
 
@@ -407,8 +415,8 @@ project.
   (default 10,000, configurable via `QueryLensPipeline`'s constructor).
 - **Findings can repeat across `Analyze()` calls.** Each call re-evaluates
   rules over everything aggregated so far — it's a snapshot, not an event
-  stream. If you want "only tell me about new problems," diff two reports
-  yourself for now (baseline comparison is Phase 10).
+  stream. If you want "only tell me about new problems," compare against a
+  saved baseline snapshot using `querylens compare` or `querylens verify`.
 
 ## Quick reference
 
@@ -421,4 +429,4 @@ project.
 | Console / background | Wrapped connection, or manual `CaptureAsync` (§3) | - |
 | SQL Server CPU/logical reads | `QueryLensSqlServer.AnalyzeWithQueryStoreAsync(...)` (§4) - built | - |
 | Execution plan analysis (scans, sorts, missing indexes, ...) | Same call as above (§4) - built | - |
-| Reading results | `pipeline.Analyze()` in code (§6) | CLI (Phase 8), HTML report (Phase 9) |
+| Reading results | `pipeline.Analyze()` in code (§6), `querylens report --format json/html` | Web Dashboard (Phase 11) |

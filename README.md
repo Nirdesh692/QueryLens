@@ -1,4 +1,4 @@
-# QueryLens — Phases 1-6 (Core + EF6 + EF Core + ADO.NET + Query Store + Execution Plans)
+# QueryLens — Phases 1-9 (Core + EF6 + EF Core + ADO.NET + Query Store + Execution Plans + Regression Baselines + CLI + HTML Report)
 
 QueryLens is a cross-version .NET database performance analyzer.
 
@@ -9,11 +9,18 @@ QueryLens is a cross-version .NET database performance analyzer.
 - **Phase 4** added the **ADO.NET adapter** (also giving Dapper first-class support).
 - **Phase 5** added **SQL Server Query Store integration** - reading
   `sys.query_store_*` and correlating it with application-captured queries.
-- **Phase 6** (this delivery) adds **execution plan analysis**: parsing the
+- **Phase 6** added **execution plan analysis**: parsing the
   plan XML Query Store already hands back (captured but unparsed since Phase
   5) and running deterministic, evidence-based rules over it - Table Scan,
   Key Lookup, Sort, Hash Match, Nested Loops, Spool, and parallelism
   detection, plus surfacing SQL Server's own missing-index suggestions.
+- **Phase 7** added **regression baselines**: snapshotting metrics and detecting
+  duration, CPU, or read performance regressions across releases.
+- **Phase 8** added the **CLI** (`src/QueryLens.Cli`): `querylens analyze`,
+  `report`, `compare`, and `verify` commands.
+- **Phase 9** (this delivery) adds **self-contained HTML reporting**: an offline,
+  single-file HTML performance report with embedded styling, scorecard, diagnostic
+  callouts (regressions, N+1, query explosion), top query rankings, and full query details.
 
 ## What's in this phase
 
@@ -180,9 +187,9 @@ NuGet restore.
 3. ✅ **EF Core adapter**
 4. ✅ **ADO.NET adapter** — connection/command decorator, Dapper support
 5. ✅ **SQL Server Query Store integration** — reader, correlation, CPU/reads rules
-6. ✅ **Execution plan parser** — ShowPlan XML parsing, 9 advisory rules, missing-index suggestions (this delivery)
-7. Advanced rules (regression baselines)
-8. CLI (`querylens analyze`, `report`, `compare`, `verify`)
-9. HTML report
+6. ✅ **Execution plan parser** — ShowPlan XML parsing, 9 advisory rules, missing-index suggestions
+7. ✅ **Advanced rules (regression baselines)** — baseline snapshots & comparison
+8. ✅ **CLI** (`querylens analyze`, `report`, `compare`, `verify`)
+9. ✅ **HTML report** — self-contained, offline HTML report renderer
 10. Regression baselines / CI-CD gate (`querylens verify`)
 11. Dashboard

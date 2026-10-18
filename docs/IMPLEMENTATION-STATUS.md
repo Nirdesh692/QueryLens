@@ -1,7 +1,7 @@
 # QueryLens — Implementation Status & Roadmap
 
 This document is the single reference for what QueryLens actually contains
-(Phases 1-7, delivered) and what's left to build (Phases 8-11, not
+(Phases 1-9, delivered) and what's left to build (Phases 10-11, not
 started)
 across the root `README.md` and `docs/user-guide.md` — read this first if
 you want the full picture; read those for narrower, task-focused guidance.
@@ -17,8 +17,8 @@ you want the full picture; read those for narrower, task-focused guidance.
 | 5 | SQL Server Query Store | ✅ Delivered | Reads `sys.query_store_*`, correlates with app-captured queries |
 | 6 | Execution plan analysis | ✅ Delivered | Parses ShowPlan XML, 9 advisory rules, missing-index suggestions |
 | 7 | Advanced rules / regression | ✅ Delivered | Baseline storage + comparison, regression detection |
-| 8 | CLI | ✅ Delivered | `querylens analyze/report/compare/verify` (`src/QueryLens.Cli`; HTML format is a hook for Phase 9) |
-| 9 | HTML report | ❌ Not started | Static, server-less HTML report renderer |
+| 8 | CLI | ✅ Delivered | `querylens analyze/report/compare/verify` (`src/QueryLens.Cli`) |
+| 9 | HTML report | ✅ Delivered | Single-file, offline HTML report renderer with embedded CSS, scorecard, top culprits & query catalog |
 | 10 | Regression baselines / CI-CD gate | ❌ Not started | Build-breaking performance gate for pipelines |
 | 11 | Dashboard | ❌ Not started | Web UI over everything above |
 
@@ -348,6 +348,57 @@ Compares a current run against a saved baseline. Pure data transformation.
 
 ---
 
+### Phase 8: `QueryLens.Cli`
+
+Command-line tool so query analysis, reporting, comparisons, and verification
+do not require writing C# to execute. Targets `net8.0`.
+
+- `CliApp` / `CliArguments` — argument parsing and command dispatch.
+- `analyze` (`AnalyzeCommand`) — runs rules and scoring over captured statistics
+  against optional baseline, prints console summary, and optionally saves
+  versioned JSON report.
+- `report` (`ReportCommand`) — renders a report from a saved report or
+  statistics file into specified format (`json` or `html`). Pluggable via
+  `ReportRendererRegistry`.
+- `compare` (`CompareCommand`) — prints percentage differences in duration,
+  P95, CPU, logical reads, and execution count between baseline and current run.
+- `verify` (`VerifyCommand`) — CI-friendly gate with non-zero exit code on
+  duration regressions or execution count limits.
+- `ReportDocument` / `ReportSerializer` / `ReportMapper` — versioned JSON
+  serialization with strict parameter value exclusion.
+
+**Validation**: fully validated by 31 unit tests covering all commands,
+argument parsing, exit codes, and serializer round-tripping.
+
+---
+
+### Phase 9: HTML Report (`QueryLens.Cli/Reporting/HtmlReportRenderer.cs`)
+
+Generates a single, self-contained, server-less HTML file summarizing performance
+reports without external network dependencies.
+
+- `HtmlReportRenderer` — implements `IReportRenderer` and registered in
+  `ReportRendererRegistry` under format `"html"`.
+- **Inline Styling**: Zero CDN/external dependencies; responsive layout
+  supporting light and dark modes (`prefers-color-scheme`).
+- **Scorecard & Penalties**: Circular score badge (0-100) with color states
+  (healthy green, warning amber, critical red) and category breakdown table.
+- **KPI Summary**: Highlight cards for query counts, total executions,
+  and finding counts by severity.
+- **Diagnostic Callouts**: Dedicated alert banners for performance regressions
+  (`QUERYREGRESSION001`), N+1 patterns (`NPLUSONE001`), and query explosion (`QUERYEXPLOSION001`).
+- **Top Performance Culprits**: Side-by-side rankings for slowest queries,
+  highest CPU consumers, and highest logical read operations.
+- **Full Query Catalog**: Formatted monospace SQL code blocks with safe HTML
+  escaping, per-query duration/CPU/reads metrics, and linked findings.
+- Activated via `querylens report <input.json> --format html [--output report.html]`.
+
+**Validation**: fully validated by unit and CLI integration tests in
+`QueryLens.Cli.Tests` covering formatting, score coloring, XSS safety,
+and file output.
+
+---
+
 ## Part 2 — Cross-cutting systems (current full state)
 
 ### `QueryLensOptions` reference
@@ -437,11 +488,11 @@ so explicitly rather than blending unverified code in with proven code.
 
 ## Part 3 — What's remaining
 
-The original phased plan (unchanged since Phase 1) has four phases left
-(Phase 7 has since been delivered; its description below is kept for history).
+The original phased plan (unchanged since Phase 1) has two phases left
+(Phases 7, 8, and 9 have since been delivered; their descriptions below are kept for history).
 None of this exists yet — no partial implementation, no stubs — this is a
-from-scratch description of each based on the same source spec the first
-six phases were built from.
+from-scratch description of each based on the same source spec the earlier
+phases were built from.
 
 ### Phase 7: Advanced rules — regression baselines
 
@@ -602,10 +653,6 @@ delivery pattern hasn't required until now.
 
 ## Part 5: suggested order for what's left
 
-Phases 7 → 8 → 9 → 10 → 11 is also the dependency order: 7 defines the
-comparison logic, 8 exposes it (and everything before it) via CLI, 9 adds a
-rendering target the CLI can call, 10 is largely 7+8 packaged for CI, and
-11 is the only phase needing new infrastructure (persistent storage) that
-nothing earlier required. There's no technical reason they couldn't be
-reordered, but 7 before 10 and 8 before 9 are the two orderings that avoid
-building something on top of a piece that doesn't exist yet.
+Phases 10 → 11 is the remaining delivery order: 10 packages 7+8 for CI gates,
+and 11 is the only remaining phase needing new infrastructure (persistent storage)
+that nothing earlier required.

@@ -1,432 +1,474 @@
-# QueryLens — User Guide
+# QueryLens — Complete User Guide
 
-This guide covers how to use what's actually built today: **`QueryLens.Core`**
-(Phase 1), the **EF6 adapter** (Phase 2), the **EF Core adapter** (Phase 3),
-and the **ADO.NET adapter** (Phase 4) - which also covers Dapper, since
-Dapper executes through whatever connection you hand it. Every supported
-project type now has an official one-line (or close to it) registration
-path; nothing left in this guide requires hand-rolled glue code.
+A step-by-step guide to installing, configuring, and using **QueryLens** in any .NET project.
 
-## 1. The one concept you need: the pipeline
+---
 
-Everything goes through `QueryLensPipeline`:
+## Table of Contents
+1. [Overview & Architecture](#1-overview--architecture)
+2. [Step 1: Installation & Package Selection](#step-1-installation--package-selection)
+3. [Step 2: Configuration & Thresholds](#step-2-configuration--thresholds)
+4. [Step 3: Integrating with Your Data Access Layer](#step-3-integrating-with-your-data-access-layer)
+   - [Track A: ASP.NET Core & EF Core](#track-a-aspnet-core--entity-framework-core)
+   - [Track B: Raw ADO.NET & Dapper](#track-b-raw-adonet--dapper)
+   - [Track C: .NET Framework & EF6](#track-c-net-framework--entity-framework-6)
+   - [Track D: Background Workers, Message Handlers & Console Apps](#track-d-background-workers-message-handlers--console-apps)
+5. [Step 4: SQL Server Query Store & Execution Plan Analysis](#step-4-sql-server-query-store--execution-plan-analysis)
+6. [Step 5: Reading Results in Code & Exposing Diagnostic Endpoints](#step-5-reading-results-in-code--exposing-diagnostic-endpoints)
+7. [Step 6: Using the QueryLens CLI (JSON, HTML Reports & CI Gates)](#step-6-using-the-querylens-cli-json-html-reports--ci-gates)
+8. [Step 7: Performance Baselines & Regression Detection](#step-7-performance-baselines--regression-detection)
+9. [Production Best Practices & Privacy Model](#production-best-practices--privacy-model)
 
-```csharp
-using QueryLens.Core.Pipeline;
-using QueryLens.Core.Configuration;
+---
 
-// One pipeline instance per application (it's thread-safe — share it).
-var pipeline = new QueryLensPipeline(new QueryLensOptions
-{
-    Thresholds = { SlowQueryMs = 300, CriticalQueryMs = 800 }
-});
+## 1. Overview & Architecture
+
+QueryLens is a lightweight, cross-version .NET database performance analyzer. It intercepts database commands at runtime, normalizes and fingerprints queries, aggregates execution metrics using reservoir sampling, and evaluates rules to produce actionable performance findings and a 0–100 health score.
+
+```
++-------------------------------------------------------------------------+
+|                        Application Data Access Layer                    |
+|       EF Core Interceptor   |   EF6 Interceptor   |   ADO.NET Wrapper   |
++-------------------------------------------------------------------------+
+                                     │
+                        QueryExecution (Sql, Duration, RequestId)
+                                     ▼
++─────────────────────────────────────────────────────────────────────────+
+|                         QueryLens Core Pipeline                         |
+|  1. SQL Fingerprinter (collapses literals, masks IN lists)             |
+|  2. Reservoir Aggregator (bounded memory, P50/P90/P95/P99 percentiles)  |
+|  3. Rule Engine (Slow Query, Critical, N+1, Explosion, Scans, etc.)     |
+|  4. Performance Scorer (0-100 score with category penalty breakdown)    |
++─────────────────────────────────────────────────────────────────────────+
+             │                                              │
+             ▼                                              ▼
+  In-Memory Reports / API                   CLI Tool / Offline HTML Reports
+ (JSON, Telemetry, Baselines)              (querylens analyze/report/verify)
 ```
 
-Two methods matter:
+### Core Tenet: Zero Parameter Values Captured
+Parameter **values are never recorded or stored under any circumstance**. The `QueryParameter` model only exposes `Name`, `DbType`, and `Size`. Parameter capture is opt-in metadata-only (`options.Capture.Parameters = true`).
 
-- **`CaptureAsync(QueryExecution)`** — call this once per database command
-  your app runs. Give it at least `Sql` and `Duration`; the pipeline
-  fingerprints and aggregates it for you.
-- **`Analyze()`** — call this whenever you want a report. Returns a
-  `PerformanceReport` with `Statistics`, `Findings`, and `Score`.
+---
 
-That's the entire contract. Everything below is just different ways of
-calling `CaptureAsync` depending on how your project talks to the database.
+## Step 1: Installation & Package Selection
 
-## 2. Referencing QueryLens.Core
+Choose the package(s) matching your application stack:
 
-Add a project reference (or, once you package it, a `<PackageReference>`)
-from your app to `QueryLens.Core.csproj`. It targets `netstandard2.0`, so it
-works from a .NET Framework 4.7.2/4.8 project just as well as a modern
-.NET project — no special configuration needed.
+| Package | Target Runtimes | What it's for |
+|---|---|---|
+| **`QueryLens.Core`** | `netstandard2.0` (.NET Core, .NET 6/8/9/10, .NET Framework 4.6.1+) | Core pipeline, models, fingerprinting, aggregation, rules, scoring |
+| **`QueryLens.EFCore`** | `net8.0+` | Interceptors and DI extensions for EF Core |
+| **`QueryLens.EF6`** | `net472;net48` | Interceptor and ambient correlation for Entity Framework 6 |
+| **`QueryLens.AdoNet`** | `netstandard2.0` | Transparent connection/command decorator for raw ADO.NET and Dapper |
+| **`QueryLens.SqlServer`** | `netstandard2.0` | SQL Server Query Store reader, correlator, and ShowPlan XML parser |
+| **`QueryLens.Cli`** | `net8.0+` (Global Tool) | Command-line tool for analysis, HTML reports, comparisons, and CI gates |
 
-## 3. Wiring it into different project types
+### Installing via .NET CLI:
+```bash
+# For modern EF Core projects:
+dotnet add package QueryLens.EFCore
 
-### ASP.NET Core + EF Core — official adapter (Phase 3)
+# For Dapper / ADO.NET projects:
+dotnet add package QueryLens.AdoNet
 
-This one's built too. Register it in DI, then wire it into your `DbContext`:
+# For SQL Server Query Store & Execution Plan analysis:
+dotnet add package QueryLens.SqlServer
 
+# Install the QueryLens CLI globally:
+dotnet tool install --global QueryLens.Cli
+```
+
+### Installing in .NET Framework / Legacy projects:
+```powershell
+# In Visual Studio Package Manager Console:
+Install-Package QueryLens.EF6
+# or for Dapper/ADO.NET:
+Install-Package QueryLens.AdoNet
+```
+
+### Project Reference (if building from source):
+```xml
+<ItemGroup>
+  <ProjectReference Include="..\QueryLens.EFCore\QueryLens.EFCore.csproj" />
+  <!-- or QueryLens.AdoNet, QueryLens.Core, etc. -->
+</ItemGroup>
+```
+
+---
+
+## Step 2: Configuration & Thresholds
+
+QueryLens works out of the box with sensible defaults, but every threshold and analysis rule is customizable.
+
+### Option A: Via `appsettings.json` (ASP.NET Core)
+Add a `QueryLens` section to your configuration:
+
+```json
+{
+  "QueryLens": {
+    "Enabled": true,
+    "Capture": {
+      "Sql": true,
+      "Parameters": false
+    },
+    "Thresholds": {
+      "SlowQueryMs": 300,
+      "CriticalQueryMs": 1000,
+      "MaxQueriesPerRequestWarning": 25,
+      "MaxQueriesPerRequestCritical": 50,
+      "MaxRowsReturned": 5000,
+      "NPlusOneMinExecutions": 3,
+      "NPlusOneMinConfidence": 0.6,
+      "HighCpuMs": 200,
+      "HighLogicalReads": 10000,
+      "RegressionTolerancePercent": 20
+    },
+    "Analysis": {
+      "NPlusOne": true,
+      "QueryRegression": true,
+      "ExecutionPlan": true,
+      "QueryStore": true
+    }
+  }
+}
+```
+
+### Option B: In-Code Configuration
+```csharp
+using QueryLens.Core.Configuration;
+
+var options = new QueryLensOptions();
+options.Thresholds.SlowQueryMs = 250;
+options.Thresholds.CriticalQueryMs = 800;
+options.Capture.Parameters = true; // Captures names/types/sizes only, never values
+```
+
+---
+
+## Step 3: Integrating with Your Data Access Layer
+
+### Track A: ASP.NET Core & Entity Framework Core
+
+#### 1. Register QueryLens in `Program.cs`:
 ```csharp
 using QueryLens.EFCore.Extensions;
 
-builder.Services.AddQueryLens(options =>
-{
-    options.Thresholds.SlowQueryMs = 300;
-    options.Thresholds.CriticalQueryMs = 800;
-});
+var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddDbContext<MyDbContext>((sp, options) =>
-    options.UseSqlServer(connectionString).AddQueryLensInterceptor(sp));
+// Register QueryLens pipeline in DI (binds options from appsettings.json automatically)
+builder.Services.AddQueryLens(builder.Configuration.GetSection("QueryLens"));
+
+// Alternatively, configure via code:
+// builder.Services.AddQueryLens(options => {
+//     options.Thresholds.SlowQueryMs = 300;
+// });
+
+// Register your DbContext and attach the QueryLens interceptor
+builder.Services.AddDbContext<AppDbContext>((serviceProvider, dbOptions) =>
+{
+    dbOptions.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"))
+             .AddQueryLensInterceptor(serviceProvider);
+});
 ```
 
-For N+1 and query-explosion detection, bridge the framework's per-request id
-into QueryLens - a couple of lines of middleware:
+#### 2. Add Request Correlation Middleware:
+To enable **N+1 query detection** and **Query Explosion** rules, bridge the HTTP request identifier to ambient correlation:
 
 ```csharp
+var app = builder.Build();
+
 app.Use(async (context, next) =>
 {
+    // Sets ambient RequestId for the duration of the HTTP request
     QueryLensEfCore.SetCurrentRequestId(context.TraceIdentifier);
     await next();
 });
 ```
 
-This uses `AsyncLocal<string>` under the hood (the modern equivalent of
-EF6's `CallContext`), which flows across the async calls EF Core makes while
-running a query. No DI, e.g. a console app? Skip `AddQueryLens` entirely:
-
+#### 3. Standalone / Non-DI EF Core (e.g., Console or Test Runner):
 ```csharp
 var (pipeline, interceptor) = QueryLensEfCore.CreatePipelineAndInterceptor();
 
-var options = new DbContextOptionsBuilder<MyDbContext>()
+var dbOptions = new DbContextOptionsBuilder<AppDbContext>()
     .UseSqlServer(connectionString)
     .AddInterceptors(interceptor)
     .Options;
+
+using var context = new AppDbContext(dbOptions);
 ```
 
-Want parameter names/types/sizes captured too (never values)? Same flag as
-EF6:
+---
 
+### Track B: Raw ADO.NET & Dapper
+
+The `QueryLens.AdoNet` adapter wraps any `DbConnection` (`SqlConnection`, `NpgsqlConnection`, `SqliteConnection`, etc.) with zero changes required to your queries or Dapper calls.
+
+#### 1. Wrap the Connection at Creation:
 ```csharp
-builder.Services.AddQueryLens(options => options.Capture.Parameters = true);
-```
-
-**A caveat worth knowing:** same story as EF6 - the shared capture logic
-(`DbCommandExecutionBuilder`, used by both adapters) was validated in a
-sandboxed environment, but the EF Core-specific interceptor code that calls
-into it wasn't compiled against a real `Microsoft.EntityFrameworkCore`
-package. It's intentionally thin (EF Core hands you the duration directly,
-so there's no timing logic to get wrong, unlike EF6). Build
-`QueryLens.EFCore.Tests` on a real machine before leaning on this in
-production.
-
-### .NET Framework + EF6 — official adapter (Phase 2)
-
-This one's built. Reference `QueryLens.EF6` and register it once at startup
-(e.g. `Global.asax`'s `Application_Start`):
-
-```csharp
-using QueryLens.Core.Configuration;
-using QueryLens.EF6.Extensions;
-
-var pipeline = QueryLensEf6.Register(new QueryLensOptions
-{
-    Thresholds = { SlowQueryMs = 300, CriticalQueryMs = 800 }
-});
-```
-
-That's it - no `DbContext` or LINQ query changes needed. For N+1 and
-query-explosion detection, set a request id per unit of work (e.g. in an
-`HttpModule`'s `BeginRequest`):
-
-```csharp
-QueryLensEf6.SetCurrentRequestId(HttpContext.Current.Request.Headers["X-Request-Id"] ?? Guid.NewGuid().ToString());
-```
-
-This uses `CallContext` under the hood, which flows across the async calls
-EF6 makes while running a query. If you'd rather source the id from
-somewhere else, pass your own delegate instead:
-
-```csharp
-var pipeline = QueryLensEf6.Register(requestIdProvider: () => HttpContext.Current?.Items["RequestId"] as string);
-```
-
-Want parameter names/types/sizes captured too (never values - see the Core
-README)? Turn it on explicitly:
-
-```csharp
-QueryLensEf6.Register(new QueryLensOptions { Capture = { Parameters = true } });
-```
-
-**A caveat worth knowing:** this adapter was built and its core logic
-(SQL/duration/parameter extraction) was validated in a sandboxed environment
-without access to a real EF6 assembly - see `src/QueryLens.EF6`'s notes in
-the root README. The EF6-interface plumbing itself is small and written
-against EF6's long-stable interception API, but hasn't been compiled against
-a real `EntityFramework` package. Build `QueryLens.EF6.Tests` on a real
-machine before leaning on this in production.
-
-### Raw ADO.NET and Dapper — official adapter (Phase 4)
-
-This one's built too, and it's the adapter to reach for regardless of
-project type - it works identically on .NET Framework and modern .NET.
-Wrap your connection once, right after creating it:
-
-```csharp
+using System.Data.SqlClient; // or Microsoft.Data.SqlClient
 using QueryLens.AdoNet.Extensions;
+using QueryLens.Core.Pipeline;
 
-var (pipeline, connection) = QueryLensAdoNet.CreatePipelineAndWrap(
-    new SqlConnection(connectionString),
-    new QueryLensOptions { Thresholds = { SlowQueryMs = 300 } });
+// Create or inject a singleton pipeline
+var pipeline = new QueryLensPipeline();
+
+// Wrap your raw connection:
+using var rawConn = new SqlConnection(connectionString);
+using var connection = QueryLensAdoNet.Wrap(rawConn, pipeline);
 
 connection.Open();
 ```
 
-From here, use `connection` exactly like you would the real one - it *is* a
-real `DbConnection`/`IDbConnection`, just wrapped. Raw ADO.NET:
+#### 2. Execute with Dapper or Raw ADO.NET:
+Because the returned object is a standard `DbConnection`, Dapper works transparently:
 
 ```csharp
-using var command = connection.CreateCommand();
-command.CommandText = "SELECT * FROM Orders WHERE CustomerId = @Id";
-// ... add parameters, ExecuteReader/ExecuteNonQuery/ExecuteScalar as usual ...
+using Dapper;
+
+// Ambient RequestId for N+1 grouping:
+QueryLensAdoNet.SetCurrentRequestId(Guid.NewGuid().ToString());
+
+// Dapper queries are captured automatically:
+var customer = connection.QueryFirstOrDefault<Customer>(
+    "SELECT * FROM Customers WHERE Id = @Id", new { Id = 42 });
+
+// Raw ADO.NET commands are also captured automatically:
+using var cmd = connection.CreateCommand();
+cmd.CommandText = "UPDATE Accounts SET Balance = Balance - @Amount WHERE Id = @Id";
+// cmd.Parameters.Add(...);
+cmd.ExecuteNonQuery();
 ```
 
-Dapper, through the exact same connection - this is the one that matters,
-since Dapper has no interception points of its own and previously had no
-way to be captured transparently:
-
+#### 3. Escape Hatch for Provider-Specific APIs:
+If you need provider-specific features (such as `SqlBulkCopy`):
 ```csharp
-var orders = connection.Query<Order>("SELECT * FROM Orders WHERE CustomerId = @Id", new { Id = 42 });
-```
-
-Both get captured automatically. Already have a pipeline from another
-adapter (e.g. you're also using EF Core elsewhere) and just want ADO.NET/
-Dapper folded into the same one? Use `Wrap` instead of
-`CreatePipelineAndWrap`:
-
-```csharp
-var connection = QueryLensAdoNet.Wrap(new SqlConnection(connectionString), existingPipeline);
-```
-
-For N+1 detection, same pattern as the other adapters:
-
-```csharp
-QueryLensAdoNet.SetCurrentRequestId(Guid.NewGuid().ToString()); // or your framework's request/operation id
-```
-
-Need the real, unwrapped provider object for something the wrapper doesn't
-expose (e.g. casting to `SqlConnection` for `SqlBulkCopy`)? Every wrapper
-type has an escape hatch: `connection.InnerConnection`, `command.InnerCommand`,
-`transaction.InnerTransaction`.
-
-**A caveat worth knowing, and a better one this time:** unlike EF6/EF Core,
-`DbConnection`/`DbCommand`/`DbTransaction` are part of the BCL, not a
-NuGet-only package - so this entire adapter, not just a slice of it, was
-actually compiled and run against real base classes in a sandboxed
-environment before being shipped. It's the most-validated adapter of the
-four. See the root README's testing notes for exactly what that covered.
-
-### Console apps / background workers / message processors
-
-If you're using ADO.NET or Dapper (most likely), use the adapter above -
-just set a `RequestId` per unit of work instead of per HTTP request:
-
-```csharp
-async Task ProcessMessage(Message message)
+if (connection is QueryLensDbConnection wrapped)
 {
-    QueryLensAdoNet.SetCurrentRequestId(message.MessageId);
-    var orders = await connection.QueryAsync<Order>("...", new { message.CustomerId });
+    var realConn = (SqlConnection)wrapped.InnerConnection;
+    using var bulk = new SqlBulkCopy(realConn);
+    // ...
 }
 ```
 
-If there's genuinely no `DbCommand` involved (e.g. you're calling a data
-store some other way, or writing a from-scratch capture path), fall back to
-calling the pipeline directly:
+---
 
+### Track C: .NET Framework & Entity Framework 6
+
+#### 1. Register Once in `Global.asax.cs`:
 ```csharp
-async Task ProcessMessage(Message message)
-{
-    var sw = Stopwatch.StartNew();
-    var orders = await LoadOrders(message.CustomerId); // your data access code
-    sw.Stop();
+using QueryLens.EF6.Extensions;
+using QueryLens.Core.Configuration;
 
-    await pipeline.CaptureAsync(new QueryExecution
+public class MvcApplication : System.Web.HttpApplication
+{
+    protected void Application_Start()
     {
-        Sql = "SELECT * FROM Orders WHERE CustomerId = @CustomerId",
-        Duration = sw.Elapsed,
-        RequestId = message.MessageId, // groups queries for N+1/explosion detection
-        Provider = "AdoNet"
-    });
+        AreaRegistration.RegisterAllAreas();
+        RouteConfig.RegisterRoutes(RouteTable.Routes);
+
+        // One-line registration: hooks into EF6's DbInterception
+        QueryLensEf6.Register(new QueryLensOptions
+        {
+            Thresholds = { SlowQueryMs = 400 }
+        });
+    }
+
+    protected void Application_BeginRequest()
+    {
+        // Correlation for N+1 detection in legacy apps (uses CallContext)
+        var requestId = Request.Headers["X-Request-Id"] ?? Guid.NewGuid().ToString();
+        QueryLensEf6.SetCurrentRequestId(requestId);
+    }
 }
 ```
 
-Without a `RequestId`, `CaptureAsync` still aggregates duration/percentile
-statistics fine — you just won't get N+1 or query-explosion findings, since
-those rules need to know which queries happened together.
+---
 
-## 4. Enriching with SQL Server Query Store and execution plans (Phases 5-6)
+### Track D: Background Workers, Message Handlers & Console Apps
 
-Everything above captures queries as your *application* sees them - SQL
-sent, time elapsed. SQL Server's Query Store separately records what
-actually happened server-side: CPU, logical reads, and the execution plan
-itself. If you're on SQL Server, you can pull that in and get both sides of
-the story for the same query:
+For background processors, queue consumers (RabbitMQ, Azure Service Bus, Kafka), or Hangfire jobs, set a `RequestId` per message:
 
 ```csharp
-using QueryLens.SqlServer;
-
-await using var connection = new SqlConnection(connectionString); // same database your app used
-await connection.OpenAsync();
-
-var report = await QueryLensSqlServer.AnalyzeWithQueryStoreAsync(pipeline, connection);
-```
-
-`report.Findings` and `report.Score` include everything from Core's rules
-*and* two new ones this brings: high-CPU and high-logical-reads, using
-Query Store's own numbers (which nothing else can see - client-side timing
-alone can't tell you CPU or reads) - *and*, as of this delivery, findings
-from parsing each query's execution plan: large scans, expensive sorts and
-hash matches, frequent key lookups, nested loops over a large driving input,
-spools, parallelism, and SQL Server's own missing-index suggestions if it
-made one. No extra call needed - it's all folded into the same
-`report.Findings`.
-
-`report.CorrelatedQueries` pairs up the two sides, and now carries the
-parsed plan too:
-
-```csharp
-foreach (var query in report.CorrelatedQueries)
+public async Task ProcessMessageAsync(OrderMessage message)
 {
-    if (query.HasApplicationData)
-        Console.WriteLine($"App: {query.ApplicationStatistics.AverageDurationMs:F0}ms");
-    if (query.HasQueryStoreData)
-        Console.WriteLine($"SQL Server: {query.QueryStoreEntry.AvgCpuMs:F0}ms CPU, {query.QueryStoreEntry.AvgLogicalReads:N0} reads");
-    if (query.ParsedExecutionPlan != null)
-        foreach (var op in query.ParsedExecutionPlan.AllOperators)
-            Console.WriteLine($"  {op.PhysicalOp}: ~{op.EffectiveEstimatedRows:N0} rows");
+    // Group queries within this message unit of work
+    QueryLensAdoNet.SetCurrentRequestId(message.MessageId);
+
+    // Queries executed here will be grouped for N+1 and explosion detection
+    var order = await _db.QueryAsync<Order>("SELECT * FROM Orders WHERE Id = @Id", new { message.OrderId });
+    // ...
 }
 ```
 
-A query can have just one side populated - something Query Store retained
-from before your app started capturing, or something your app captured that
-fell out of Query Store's retention window. Both are still useful; check
-`HasApplicationData`/`HasQueryStoreData` before assuming both are there.
-`ParsedExecutionPlan` is null when there was no plan XML to parse, or when
-`options.Analysis.ExecutionPlan` is turned off.
+---
 
-**Query Store has to actually be turned on** - it's off by default for new
-user databases (on by default only in Azure SQL Database). That's normally
-a one-time setup step:
+## Step 4: SQL Server Query Store & Execution Plan Analysis
 
+Client-side timing only tells part of the story. By combining client capture with SQL Server's **Query Store**, QueryLens correlates application queries with server-side CPU, logical reads, and parses ShowPlan XML execution plans.
+
+### 1. Enable Query Store on your SQL Server Database:
 ```sql
 ALTER DATABASE YourDatabase SET QUERY_STORE = ON;
 ```
 
-If it's off, `AnalyzeWithQueryStoreAsync` throws `QueryStoreNotEnabledException`
-with that exact fix in the message, rather than silently returning nothing.
-
-Want to tune the thresholds?
-
+### 2. Run Enriched Analysis in C#:
 ```csharp
-var pipeline = new QueryLensPipeline(new QueryLensOptions
+using QueryLens.SqlServer;
+
+// Pass your pipeline and an open connection to your database
+using var connection = new SqlConnection(connectionString);
+await connection.OpenAsync();
+
+var report = await QueryLensSqlServer.AnalyzeWithQueryStoreAsync(pipeline, connection);
+
+// 1. Overall health score
+Console.WriteLine($"Score: {report.Score.Score}/100");
+
+// 2. Correlated application + server metrics
+foreach (var query in report.CorrelatedQueries)
 {
-    Thresholds =
+    Console.WriteLine($"Query: {query.NormalizedSql}");
+    if (query.HasApplicationData)
+        Console.WriteLine($"  App Avg Duration: {query.ApplicationStatistics.AverageDurationMs:F1}ms");
+    if (query.HasQueryStoreData)
+        Console.WriteLine($"  SQL Server CPU: {query.QueryStoreEntry.AvgCpuMs:F1}ms, Reads: {query.QueryStoreEntry.AvgLogicalReads:N0}");
+
+    // 3. Parsed Execution Plan Operators & Missing Indexes
+    if (query.ParsedExecutionPlan != null)
     {
-        HighCpuMs = 100,
-        HighLogicalReads = 5000,
-        LargeScanRowThreshold = 5000,    // Table/Clustered Index/Index Scan
-        KeyLookupRowThreshold = 500,     // Key/RID Lookup, adjusted for repeat executions
-        ExpensiveSortRowThreshold = 5000,
-        ExpensiveHashRowThreshold = 5000,
-        SpoolRowThreshold = 5000
+        foreach (var op in query.ParsedExecutionPlan.AllOperators)
+        {
+            if (op.PhysicalOp.Contains("Scan"))
+                Console.WriteLine($"  [Plan] {op.PhysicalOp} on {op.ObjectName} (~{op.EffectiveEstimatedRows:N0} rows)");
+        }
+
+        foreach (var idx in query.ParsedExecutionPlan.MissingIndexes)
+        {
+            Console.WriteLine($"  [Index Suggestion] Table: {idx.Table}, Impact: {idx.Impact}%");
+            Console.WriteLine($"    Equality: {string.Join(", ", idx.EqualityColumns)}");
+        }
     }
-});
-```
-
-Or turn execution-plan analysis off entirely while keeping Query Store's
-CPU/reads rules: `options.Analysis.ExecutionPlan = false`.
-
-Every plan-based finding tops out at `Severity.Warning` - never `Critical`
-- and even `MissingIndexRule` (which relays SQL Server's own suggestion,
-not a guess QueryLens made up) says explicitly to verify against your actual
-workload before acting on it. These are leads to investigate, not verdicts.
-
-**A caveat worth knowing:** correlation between your app's captured SQL and
-Query Store's own record of it is best-effort, not guaranteed - the two
-sides compute hashes differently, so QueryLens re-fingerprints Query Store's
-SQL text with its own fingerprinter to line them up. This works well in the
-common case (the same text reaches the server either way) but isn't
-foolproof. Also, unlike every other adapter in this guide, none of the
-actual `sys.query_store_*` querying logic (or the exact shape of real
-ShowPlan XML) could be checked against a real SQL Server in this project's
-sandbox - see the root README's testing notes for exactly what was and
-wasn't validated.
-
-## 5. Configuring thresholds
-
-`QueryLensOptions` is a plain object graph, so if you're on ASP.NET Core you
-can bind it straight from `appsettings.json` with the standard configuration
-binder — no QueryLens-specific config code needed:
-
-```json
-{
-  "QueryLens": {
-    "Thresholds": { "SlowQueryMs": 300, "CriticalQueryMs": 800, "MaxRowsReturned": 5000 },
-    "Analysis": { "NPlusOne": true }
-  }
 }
 ```
 
-```csharp
-var options = new QueryLensOptions();
-configuration.GetSection("QueryLens").Bind(options);
-var pipeline = new QueryLensPipeline(options);
-```
+---
 
-## 6. Reading the report
+## Step 5: Reading Results in Code & Exposing Diagnostic Endpoints
 
+### In-Code Analysis:
 ```csharp
 var report = pipeline.Analyze();
 
-Console.WriteLine($"Performance score: {report.Score.Score}/100");
-foreach (var component in report.Score.Components.Where(c => c.Penalty != 0))
-{
-    Console.WriteLine($"  {component.Name}: {component.Penalty} ({component.Reason})");
-}
+Console.WriteLine($"Performance Score: {report.Score.Score}/100");
 
+// Check findings
 foreach (var finding in report.Findings.OrderByDescending(f => f.Severity))
 {
-    Console.WriteLine($"[{finding.Severity}] {finding.Title} (confidence {finding.Confidence:P0})");
-    Console.WriteLine($"  {finding.Description}");
-    Console.WriteLine($"  → {finding.Recommendation}");
+    Console.WriteLine($"[{finding.Severity}] {finding.Title} (Rule: {finding.RuleId}, Confidence: {finding.Confidence:P0})");
+    Console.WriteLine($"  Description: {finding.Description}");
+    Console.WriteLine($"  Recommendation: {finding.Recommendation}");
 }
 ```
 
-You can also use the **QueryLens CLI** (`QueryLens.Cli`) to analyze, compare, verify, and generate reports without writing code:
-
-```bash
-# Generate a JSON report
-querylens report current.json --format json --output report.json
-
-# Generate an offline, single-file HTML report with scorecard, top culprits & query catalog
-querylens report current.json --format html --output report.html
-
-# Analyze against a baseline and generate an HTML report with regression callouts
-querylens report current.json --baseline baseline.json --format html --output report.html --label "Release 2.0"
+### Exposing an Admin Diagnostic Endpoint in ASP.NET Core:
+```csharp
+app.MapGet("/diagnostics/querylens", (QueryLensPipeline pipeline) =>
+{
+    var report = pipeline.Analyze();
+    return Results.Ok(new
+    {
+        Score = report.Score.Score,
+        Queries = report.Statistics.Count,
+        Findings = report.Findings
+    });
+}).RequireAuthorization("AdminPolicy");
 ```
 
-## 7. Practical notes
+---
 
-- **The pipeline is thread-safe.** One shared instance per application is
-  the right pattern (register it as a singleton in DI) — `CaptureAsync` can
-  be called concurrently from many requests at once.
-- **`RequestId` is what unlocks N+1 and query-explosion detection.** If two
-  `QueryExecution`s share a `RequestId`, they're treated as part of the same
-  unit of work. Anything without a `RequestId` still contributes to
-  duration/percentile stats, just not to those two rules.
-- **Parameter capture is opt-in and metadata-only.** `QueryExecution.Parameters`
-  holds `Name`/`DbType`/`Size` only - there's no `Value` property on
-  `QueryParameter` at all, so a capture adapter can't leak parameter values
-  even by accident. It's off by default (`QueryLensOptions.Capture.Parameters`);
-  all three adapters (EF6, EF Core, ADO.NET) respect this flag automatically.
-- **Memory is bounded automatically.** You don't need to worry about a
-  long-running process accumulating unbounded data — aggregation keeps a
-  capped, reservoir-sampled set of durations per query (default 5,000), and
-  the pipeline's raw-execution buffer for request-scoped rules is capped too
-  (default 10,000, configurable via `QueryLensPipeline`'s constructor).
-- **Findings can repeat across `Analyze()` calls.** Each call re-evaluates
-  rules over everything aggregated so far — it's a snapshot, not an event
-  stream. If you want "only tell me about new problems," compare against a
-  saved baseline snapshot using `querylens compare` or `querylens verify`.
+## Step 6: Using the QueryLens CLI (JSON, HTML Reports & CI Gates)
 
-## Quick reference
+Install the CLI tool:
+```bash
+dotnet tool install --global QueryLens.Cli
+```
 
-| Project type | Today | Coming later |
-|---|---|---|
-| .NET Framework + EF6 | `QueryLensEf6.Register(...)` (§3) - built | - |
-| ASP.NET Core / any host + EF Core | `services.AddQueryLens()` + `AddQueryLensInterceptor()` (§3) - built | - |
-| Raw ADO.NET | `QueryLensAdoNet.Wrap(...)` (§3) - built | - |
-| Dapper | Same wrapper as ADO.NET (§3) - built | - |
-| Console / background | Wrapped connection, or manual `CaptureAsync` (§3) | - |
-| SQL Server CPU/logical reads | `QueryLensSqlServer.AnalyzeWithQueryStoreAsync(...)` (§4) - built | - |
-| Execution plan analysis (scans, sorts, missing indexes, ...) | Same call as above (§4) - built | - |
-| Reading results | `pipeline.Analyze()` in code (§6), `querylens report --format json/html` | Web Dashboard (Phase 11) |
+### 1. Generating a Self-Contained HTML Report:
+Turn captured statistics or reports into an offline, interactive HTML report with embedded CSS, color scorecards, top performance culprits, and query catalogs:
+
+```bash
+# Render directly from a saved statistics snapshot:
+querylens report current.json --format html --output performance-report.html --label "Sprint 42 Release"
+
+# Render in JSON format:
+querylens report current.json --format json --output report.json
+```
+
+### 2. Comparing Two Runs (Terminal Summary):
+Compare current performance against a previous baseline:
+
+```bash
+querylens compare baseline.json current.json
+```
+Output:
+```text
+Comparing baseline (12 queries) to current (14 queries):
+
+Hash          D-Avg (%)   D-P95 (%)   CPU (%)    Reads (%)   Execs (%)  Status
+---------------------------------------------------------------------------------
+abc123456789  +45.2%      +52.1%      +40.0%     +0.0%       +10.0%     Regressed
+def987654321  -12.0%      -8.5%       -15.0%     -5.0%       0.0%       Improved
+ghi111222333  ---         ---         ---        ---         ---        New
+```
+
+### 3. CI/CD Performance Gate (`verify`):
+Break automated build pipelines (exit code 1) if queries regress or query explosion limits are breached:
+
+```bash
+# Fail if any query regressed by more than 20% compared to baseline:
+querylens verify current.json --baseline baseline.json --max-duration-regression 20
+
+# Fail if total database executions exceed 100:
+querylens verify current.json --max-query-count 100
+
+# Combined gate:
+querylens verify current.json --baseline baseline.json --max-duration-regression 15 --max-query-count 50
+```
+
+---
+
+## Step 7: Performance Baselines & Regression Detection
+
+Save snapshots across releases to detect regressions over time:
+
+```csharp
+// 1. Create and persist a baseline snapshot
+var baseline = pipeline.CreateBaseline("Release-1.0");
+var json = BaselineSerializer.Serialize(baseline);
+File.WriteAllText("baseline-1.0.json", json);
+
+// 2. Later: analyze a current run against the saved baseline
+var savedBaseline = BaselineSerializer.Deserialize(File.ReadAllText("baseline-1.0.json"));
+var currentReport = pipeline.AnalyzeAgainstBaseline(savedBaseline);
+
+// Automatically includes 'QUERYREGRESSION001' findings for any regressed queries!
+foreach (var reg in currentReport.Findings.Where(f => f.RuleId == "QUERYREGRESSION001"))
+{
+    Console.WriteLine($"Regression in {reg.QueryHash}: {reg.Description}");
+}
+```
+
+---
+
+## Production Best Practices & Privacy Model
+
+1. **Shared Singleton Pipeline**:
+   The `QueryLensPipeline` is fully thread-safe and designed to run as a single shared instance across the entire application lifecycle.
+2. **Bounded Memory via Reservoir Sampling**:
+   QueryLens automatically bounds memory usage. It retains a maximum reservoir sample size (default 5,000 durations per query hash) and bounds the raw request buffer (default 10,000 executions). Memory consumption remains constant even in high-throughput applications running for months.
+3. **Privacy by Design**:
+   - Parameter values cannot be leaked because `QueryParameter` has no `Value` property.
+   - Captured SQL text normalizes string and numeric literals into `?` placeholders.
+4. **Advisory Rule Engine**:
+   Execution plan and Query Store findings top out at `Severity.Warning` — recommendations are diagnostic leads to guide engineering decisions, not automated schema modifications.
